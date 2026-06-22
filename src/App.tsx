@@ -4,9 +4,12 @@ import { PromptInput } from './components/PromptInput'
 import { Player } from './components/Player'
 import { Uploader } from './components/Uploader'
 import { interpretPrompt } from './interpret/rules'
+import { estimateDepth, isDepthLikelySupported } from './depth/estimateDepth'
 import { isRecordingSupported, recordCanvas } from './render/recorder'
 import { MotionRenderer } from './render/renderer'
 import type { AspectRatio } from './types'
+
+type DepthStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 const ASPECTS: AspectRatio[] = ['16:9', '9:16', '1:1']
 
@@ -23,12 +26,16 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [parallaxOn, setParallaxOn] = useState(false)
+  const [depthStatus, setDepthStatus] = useState<DepthStatus>('idle')
 
   // 最新値を effect 内から参照するための ref
   const promptRef = useRef(prompt)
   const previewingRef = useRef(isPreviewing)
+  const parallaxOnRef = useRef(parallaxOn)
   promptRef.current = prompt
   previewingRef.current = isPreviewing
+  parallaxOnRef.current = parallaxOn
 
   // レンダラ初期化
   useEffect(() => {
@@ -60,7 +67,9 @@ export default function App() {
       aspectRatio: aspect,
       durationSec: duration,
     })
-    r.setImage(img)
+    // パララックスは「トグルON かつ デプス分離済み」のときだけ有効化
+    spec.parallax.enabled = parallaxOnRef.current && r.hasDepth
+    spec.parallax.strength = 0.35
     r.setSpec(spec)
     if (play) {
       r.play({ loop: true })
@@ -70,6 +79,39 @@ export default function App() {
       r.renderStill()
       setIsPreviewing(false)
     }
+  }
+
+  /** デプス推定を実行して前景レイヤーを用意する（未計算なら計算） */
+  async function ensureDepth(): Promise<boolean> {
+    const r = rendererRef.current
+    if (!r || !imageElRef.current || !imageUrl) return false
+    if (r.hasDepth) return true
+    setDepthStatus('loading')
+    setError(null)
+    try {
+      const dm = await estimateDepth(imageUrl)
+      r.setDepth(dm)
+      setDepthStatus('ready')
+      return true
+    } catch (err) {
+      console.error(err)
+      setDepthStatus('error')
+      setError('奥行き推定に失敗しました（この環境では未対応の可能性）。パララックスをオフにします。')
+      return false
+    }
+  }
+
+  async function handleParallaxToggle(on: boolean) {
+    setParallaxOn(on)
+    parallaxOnRef.current = on
+    if (on) {
+      const ok = await ensureDepth()
+      if (!ok) {
+        setParallaxOn(false)
+        parallaxOnRef.current = false
+      }
+    }
+    applyAndRender(previewingRef.current)
   }
 
   // アスペクト比・長さ変更時は再適用（プレビュー中なら再生継続、それ以外は静止）
@@ -86,10 +128,21 @@ export default function App() {
       setVideoUrl(null)
     }
     imageElRef.current = img
+    rendererRef.current?.setImage(img) // 画像確定（前景レイヤーはリセットされる）
     setImageUrl(url)
+    setDepthStatus('idle')
     setError(null)
-    // 読み込んだら静止プレビューを表示
-    requestAnimationFrame(() => applyAndRender(false))
+    // 読み込んだら静止プレビューを表示。パララックスONなら新画像でデプス再計算
+    requestAnimationFrame(async () => {
+      if (parallaxOnRef.current) {
+        const ok = await ensureDepth()
+        if (!ok) {
+          setParallaxOn(false)
+          parallaxOnRef.current = false
+        }
+      }
+      applyAndRender(previewingRef.current)
+    })
   }
 
   function handlePreview() {
@@ -112,12 +165,13 @@ export default function App() {
       setError('このブラウザは録画に対応していません。Chrome を推奨します。')
       return
     }
-    // 録画用に最新の仕様を適用（再生はまだしない）
+    // 録画用に最新の仕様を適用（再生はまだしない）。setImage は呼ばない（デプスを保持）
     const spec = interpretPrompt(promptRef.current, {
       aspectRatio: aspect,
       durationSec: duration,
     })
-    r.setImage(imageElRef.current)
+    spec.parallax.enabled = parallaxOnRef.current && r.hasDepth
+    spec.parallax.strength = 0.35
     r.setSpec(spec)
 
     setError(null)
@@ -194,6 +248,27 @@ export default function App() {
             />
           </div>
 
+          <div className="field">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={parallaxOn}
+                disabled={isRecording || depthStatus === 'loading' || !hasImage}
+                onChange={(e) => handleParallaxToggle(e.target.checked)}
+              />
+              奥行きパララックス（人物を立体的に動かす・試験的）
+            </label>
+            {depthStatus === 'loading' && (
+              <small>🧠 AIモデルを読み込み中…（初回のみ数十MB・無料・キー不要）</small>
+            )}
+            {depthStatus === 'ready' && parallaxOn && (
+              <small>✓ 人物と背景を分離しました。プレビューで動きを確認できます</small>
+            )}
+            {!isDepthLikelySupported() && (
+              <small>※ この環境では利用できない可能性があります</small>
+            )}
+          </div>
+
           {error && <div className="error">⚠️ {error}</div>}
 
           <div className="actions">
@@ -222,8 +297,10 @@ export default function App() {
             canvasRef={canvasRef}
             aspectRatio={aspect}
             hasImage={hasImage}
-            busy={isRecording}
-            busyLabel="録画中…（数秒お待ちください）"
+            busy={isRecording || depthStatus === 'loading'}
+            busyLabel={
+              isRecording ? '録画中…（数秒お待ちください）' : 'AIで奥行きを解析中…'
+            }
           />
 
           {videoUrl && (

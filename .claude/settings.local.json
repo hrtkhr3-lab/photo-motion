@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npm create *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"dev server: HTTP %{http_code}\\\\n\" http://localhost:5173/)"
     ]
   }
 }
