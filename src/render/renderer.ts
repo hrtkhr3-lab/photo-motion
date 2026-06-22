@@ -199,23 +199,38 @@ export class MotionRenderer {
 
     if (img) {
       if (useParallax && this.fgCanvas) {
-        const strength = spec.parallax.strength
-        // 背景：少しぼかして奥行き感を出す（前景の輪郭ゴーストも目立ちにくくなる）
+        const s = spec.parallax.strength
+        // カメラのパンに依存しない「自走パララックス」。
+        // 進捗 t（0..1）で位相を作り、両端で振幅0 → ループの継ぎ目が出ない。
+        const env = Math.sin(t * Math.PI) // 0→1→0
+        const ax = Math.sin(t * Math.PI * 2) * env
+        const ay = Math.cos(t * Math.PI * 2) * env
+
+        // 背景：弱め＆前景と逆方向に動かし、ぼかして奥に引っ込める
         ctx.save()
-        ctx.filter = 'blur(2px)'
-        this.drawCover(img, img.naturalWidth, img.naturalHeight, w, h, zoom * 1.02, panX, panY)
+        ctx.filter = 'blur(4px)'
+        const bgPanX = panX - ax * s * 0.03
+        const bgPanY = panY - ay * s * 0.018
+        this.drawCover(img, img.naturalWidth, img.naturalHeight, w, h, zoom * 1.05, bgPanX, bgPanY)
+        ctx.restore()
+        // 背景をわずかに沈ませて前景を際立たせる
+        ctx.save()
+        ctx.globalAlpha = 0.18 * s
+        ctx.fillStyle = '#000'
+        ctx.fillRect(0, 0, w, h)
         ctx.restore()
 
-        // 前景(人物)：背景より大きく動かして視差を作る + 独立した微細揺れで“生きている”感
-        const fgPanX = panX * (1 + strength) + Math.sin(time * 1.3) * strength * 0.012
-        const fgPanY = panY * (1 + strength) + Math.cos(time * 0.9) * strength * 0.006
+        // 前景(人物)：強め＆順方向に動かす＋手前にせり出すズーム。明確な視差を作る
+        const fgPanX = panX + ax * s * 0.07
+        const fgPanY = panY + ay * s * 0.04
+        const fgZoom = zoom * (1 + s * 0.08 + s * 0.05 * env)
         this.drawCover(
           this.fgCanvas,
           this.fgCanvas.width,
           this.fgCanvas.height,
           w,
           h,
-          zoom * (1 + strength * 0.06),
+          fgZoom,
           fgPanX,
           fgPanY,
         )

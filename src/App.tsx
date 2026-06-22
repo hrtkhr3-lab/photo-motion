@@ -69,7 +69,7 @@ export default function App() {
     })
     // パララックスは「トグルON かつ デプス分離済み」のときだけ有効化
     spec.parallax.enabled = parallaxOnRef.current && r.hasDepth
-    spec.parallax.strength = 0.35
+    spec.parallax.strength = 0.5
     r.setSpec(spec)
     if (play) {
       r.play({ loop: true })
@@ -171,7 +171,7 @@ export default function App() {
       durationSec: duration,
     })
     spec.parallax.enabled = parallaxOnRef.current && r.hasDepth
-    spec.parallax.strength = 0.35
+    spec.parallax.strength = 0.5
     r.setSpec(spec)
 
     setError(null)
